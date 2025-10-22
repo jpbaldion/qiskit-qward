@@ -103,16 +103,16 @@ def run_experiments(
                 }
                 # Element
                 element_metrics = ElementMetrics(qc).get_metrics()
-                row.update({f"element_{k}": v for k, v in element_metrics.dict().items()})
+                row.update({f"element_{k}": v for k, v in element_metrics.model_dump().items()})
                 # Structural
                 structural_metrics = StructuralMetrics(qc).get_metrics()
-                row.update({f"structural_{k}": v for k, v in structural_metrics.dict().items()})
+                row.update({f"structural_{k}": v for k, v in structural_metrics.model_dump().items()})
                 # Behavioral
                 behavioral_metrics = BehavioralMetrics(qc).get_metrics()
-                row.update({f"behavioral_{k}": v for k, v in behavioral_metrics.dict().items()})
+                row.update({f"behavioral_{k}": v for k, v in behavioral_metrics.model_dump().items()})
                 # Quantum Specific
                 quantum_specific_metrics = QuantumSpecificMetrics(qc).get_metrics()
-                row.update({f"quantum_specific_{k}": v for k, v in quantum_specific_metrics.dict().items()})
+                row.update({f"quantum_specific_{k}": v for k, v in quantum_specific_metrics.model_dump().items()})
                 results.append(row)
     df = pd.DataFrame(results)
     df.to_csv(output_csv, index=False)
