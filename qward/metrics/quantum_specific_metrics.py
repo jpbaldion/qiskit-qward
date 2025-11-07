@@ -46,9 +46,11 @@ from qward.metrics.types import MetricsType, MetricsId
 try:
     import torch
     TORCH_AVAILABLE = True
+    TorchTensor = torch.Tensor  # alias for type hints
 except ImportError:
     TORCH_AVAILABLE = False
     torch = None
+    from typing import Any as TorchTensor  # fallback for type hints
 
 # Import schemas for structured data validation
 try:
@@ -103,6 +105,39 @@ class QuantumSpecificMetrics(MetricCalculator):
                 qc_unitary.append(instr, qargs)
         return qc_unitary
 
+    def _unitary_matrix(self, circuit: QuantumCircuit) -> Optional[np.ndarray]:
+        """Return the unitary matrix of a circuit if possible.
+
+        - Removes non-unitary ops (measure/barrier/reset).
+        - If the circuit has unbound parameters, try binding them to 0.0 as a
+          neutral default to allow evaluation. If still not possible, return None.
+
+        Args:
+            circuit: QuantumCircuit to convert.
+
+        Returns:
+            Optional[np.ndarray]: The unitary matrix or None if not obtainable.
+        """
+        if circuit is None:
+            return None
+        qc = self._remove_measurements(circuit)
+        try:
+            return Operator(qc).data
+        except TypeError as e:
+            # Typical when ParameterExpression is unbound
+            if "unbound parameters" in str(e).lower():
+                try:
+                    if qc.parameters:
+                        bind_map = {p: 0.0 for p in qc.parameters}
+                        qc_bound = qc.assign_parameters(bind_map)
+                        return Operator(qc_bound).data
+                except Exception:
+                    return None
+                return None
+            return None
+        except Exception:
+            return None
+
     def _make_pauli_x_on_n(self, n_qubits: int, target: int) -> np.ndarray:
         X = np.array([[0, 1], [1, 0]], dtype=complex)
         mats = [np.eye(2, dtype=complex)] * n_qubits
@@ -131,8 +166,9 @@ class QuantumSpecificMetrics(MetricCalculator):
             return 0.0
 
     def _magic_metric(self) -> float:
-        circuit = self._remove_measurements(self.circuit)
-        U = Operator(circuit).data
+        U = self._unitary_matrix(self.circuit)
+        if U is None:
+            raise RuntimeError("Unitary matrix not available (possibly due to unbound parameters).")
         U_t = torch.tensor(U, dtype=torch.complex64, device=self._device)
         return self._magic_optimize(U_t)
 
@@ -172,8 +208,9 @@ class QuantumSpecificMetrics(MetricCalculator):
             return 0.0
 
     def _coherence_metric(self) -> float:
-        circuit = self._remove_measurements(self.circuit)
-        U = Operator(circuit).data
+        U = self._unitary_matrix(self.circuit)
+        if U is None:
+            raise RuntimeError("Unitary matrix not available (possibly due to unbound parameters).")
         U_t = torch.tensor(U, dtype=torch.complex64, device=self._device)
         return self._coherence_optimize(U_t)
 
@@ -218,7 +255,7 @@ class QuantumSpecificMetrics(MetricCalculator):
             out = np.kron(out, m)
         return out
 
-    def _influence_from_coeffs(self, coeffs: torch.Tensor, labels: List[Tuple[str]], n_qubits: int, dim_factor: int) -> torch.Tensor:
+    def _influence_from_coeffs(self, coeffs: Any, labels: List[Tuple[str]], n_qubits: int, dim_factor: int) -> Any:
         """Compute total influence as in Bu et al. but on restricted basis."""
         q_a = (coeffs.abs() ** 2) * float(dim_factor)
         per_qubit = torch.zeros(n_qubits, dtype=torch.float32, device=self._device)
@@ -228,7 +265,7 @@ class QuantumSpecificMetrics(MetricCalculator):
                     per_qubit[i] += q_a[idx].real
         return torch.sum(per_qubit)
 
-    def _pauli_coeffs_restricted(self, O_t: torch.Tensor, pauli_t_list: List[torch.Tensor], dim_factor: int) -> torch.Tensor:
+    def _pauli_coeffs_restricted(self, O_t: Any, pauli_t_list: List[Any], dim_factor: int) -> Any:
         """Return coefficients c_a = Tr(P_a^† O)/2^n for a restricted list of Paulis."""
         coeffs = []
         denom = float(dim_factor)
@@ -244,8 +281,10 @@ class QuantumSpecificMetrics(MetricCalculator):
             return 0.0
 
         # --- Precompute data ---
-        circuit = self._remove_measurements(self.circuit)
-        U_np = Operator(circuit).data
+        U_np = self._unitary_matrix(self.circuit)
+        if U_np is None:
+            print("Warning: Sensitivity skipped: unitary not available (unbound parameters or non-unitary ops). Returning 0.0.")
+            return 0.0
         U_t = torch.tensor(U_np, dtype=torch.complex64, device=self._device)
         d = U_np.shape[0]
         n_qubits = int(np.log2(d))

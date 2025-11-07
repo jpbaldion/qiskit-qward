@@ -11,6 +11,7 @@ import networkx as nx
 import pandas as pd
 from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector
+from qiskit.quantum_info import Statevector, state_fidelity
 from ..metrics import StructuralMetrics, BehavioralMetrics, ElementMetrics, QuantumSpecificMetrics
 import os
 
@@ -18,24 +19,74 @@ import os
 def create_qaoa_maxcut_circuit(graph, p, params=None):
     n = graph.number_of_nodes()
     qc = QuantumCircuit(n)
+
     if params is None:
-        params = ParameterVector('theta', 2 * p)
-    # Inicialización en superposición
+        params = ParameterVector('θ', 2 * p)
+
+    # Superposición inicial
     qc.h(range(n))
-    # Alternar operadores de costo y mezcla
+
     for i in range(p):
         gamma = params[i]
         beta = params[p + i]
-        # Operador de costo (MaxCut)
+
+        # Hamiltoniano de costo (MaxCut)
         for u, v in graph.edges():
             qc.cx(u, v)
             qc.rz(-gamma, v)
             qc.cx(u, v)
-        # Operador de mezcla
+
+        # Hamiltoniano mezclador
         for q in range(n):
             qc.rx(2 * beta, q)
+
     qc.measure_all()
     return qc
+
+def maxcut_cost(bitstring, graph):
+    cost = 0
+    for u, v in graph.edges():
+        if bitstring[u] != bitstring[v]:
+            cost += 1
+    return cost
+
+def get_optimal_bitstrings(graph):
+    n = graph.number_of_nodes()
+    best_cost = -1
+    best_states = []
+    for i in range(2**n):
+        bitstr = format(i, f"0{n}b")
+        cost = maxcut_cost(bitstr, graph)
+        if cost > best_cost:
+            best_cost = cost
+            best_states = [bitstr]
+        elif cost == best_cost:
+            best_states.append(bitstr)
+    return best_states, best_cost
+
+def target_state_from_bitstrings(states):
+    n = len(states[0])
+    vec = np.zeros(2**n, dtype=complex)
+    for s in states:
+        vec[int(s,2)] = 1
+    vec /= np.linalg.norm(vec)
+    return Statevector(vec)
+
+def get_target_state(graph):
+    optimal_bitstrings, _ = get_optimal_bitstrings(graph)
+    return target_state_from_bitstrings(optimal_bitstrings)
+
+def get_qaoa_statevector(qc):
+    qc = qc.remove_final_measurements(inplace=False)
+    return Statevector.from_instruction(qc)
+
+def probability_of_optimal(sv, optimal_bitstrings):
+    probs = sv.probabilities_dict()
+    return sum(probs.get(bs, 0) for bs in optimal_bitstrings)
+
+def expected_cost_from_sv(sv, graph):
+    probs = sv.probabilities_dict()
+    return sum(p * maxcut_cost(bitstr, graph) for bitstr, p in probs.items())
 
 
 def run_experiments(

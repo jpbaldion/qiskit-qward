@@ -8,7 +8,11 @@ from qward.metrics.quantum_specific_metrics import QuantumSpecificMetrics
 from qward.metrics.structural_metrics import StructuralMetrics
 from qward.metrics.element_metrics import ElementMetrics
 from qward.algorithms.pvqd import ising_evolved_state, create_pvqd_ansatz
+from qward.algorithms.qaoa import create_qaoa_maxcut_circuit
+from qward.algorithms.vqte import create_vqte_circuit_variational, ising_ideal_state
 from qiskit.quantum_info import state_fidelity
+import networkx as nx
+from typing import Callable
 
 
 def test_with_noise(circuit: QuantumCircuit, simulator_config: dict = {"method": 'statevector'}, n_shots: int = 1024):
@@ -86,13 +90,8 @@ def test_with_noise(circuit: QuantumCircuit, simulator_config: dict = {"method":
     
     return jobs
 
-def calculate_metrics(circuit: QuantumCircuit, jobs: list):
+def calculate_metrics(circuit: QuantumCircuit, jobs: list, success_criteria: Callable):
 
-    
-    # Add CircuitPerformance strategy with multiple jobs
-
-    
-    
     #Create a scanner with the circuit
     
     scanner = Scanner(circuit=circuit)
@@ -102,13 +101,6 @@ def calculate_metrics(circuit: QuantumCircuit, jobs: list):
     structural_metrics = StructuralMetrics(circuit)
     element_metrics = ElementMetrics(circuit)
 
-    def success_criteria(counts):
-        print(counts)
-        output_state = counts.result().get_statevector()
-        target_value = ising_evolved_state(4)
-        # Calculamos la fidelidad.
-        fidelity = state_fidelity(target_value, output_state)
-        return fidelity
      
     circuit_performance_strategy = CircuitPerformanceMetrics(
         circuit=circuit, success_criteria=success_criteria
@@ -128,8 +120,52 @@ def calculate_metrics(circuit: QuantumCircuit, jobs: list):
     metrics_dict = scanner.calculate_metrics()
     return metrics_dict
 
-def main():
-    circuit = create_pvqd_ansatz(num_qubits=4, reps=3)
-    jobs = test_with_noise(circuit)
-    metris = calculate_metrics(circuit, jobs)
+
+def success_criteria_pvqd(job):
+    output_state = job.result().get_statevector()
+    target_value = ising_evolved_state(4)
+    # Calculamos la fidelidad.
+    fidelity = state_fidelity(target_value, output_state)
+    return fidelity
+
+def pvdq_metrics():
+    circuit_pvdq = create_pvqd_ansatz(num_qubits=4, reps=3)
+    jobs = test_with_noise(circuit_pvdq)
+    metris = calculate_metrics(circuit_pvdq, jobs, success_criteria_pvqd)
+    return metris
+
+def success_criteria_qaoa(job, graph = nx.erdos_renyi_graph(4, 0.5, seed=42)):
+    result = job.result()
+    counts = result.get_counts()
+
+    # 1. Encuentra el mejor valor de MaxCut posible en los resultados observados
+    def bitstring_maxcut(bit):
+        bit = bit[::-1]
+        return sum(bit[u] != bit[v] for u, v in graph.edges())
+
+    cut_values = {b: bitstring_maxcut(b) for b in counts}
+    best_cut = max(cut_values.values())
+
+    # 2. Probabilidad de medir una solución óptima
+    shots = sum(counts.values())
+    prob_optimal = sum(counts[b] for b, v in cut_values.items() if v == best_cut) / shots
+
+    return prob_optimal
+
+def qaoa_metrics():
+    graph = nx.erdos_renyi_graph(4, 0.5, seed=42)
+    circuit_qaoa = create_qaoa_maxcut_circuit(graph, 3)
+    jobs = test_with_noise(circuit_qaoa)
+    metris = calculate_metrics(circuit_qaoa, jobs, success_criteria_qaoa)
+    return metris
+
+def success_criteria_vqte(job, num_qubits=4, t=0.6):
+    ideal = ising_ideal_state(num_qubits, t=t)
+    output_state = job.result().get_statevector()
+    return state_fidelity(ideal, output_state)
+
+def vqte_metrics():
+    circuit_vqte = create_vqte_circuit_variational(num_qubits=4, p=3, delta_t=0.2, ansatz_type="ising")
+    jobs = test_with_noise(circuit_vqte)
+    metris = calculate_metrics(circuit_vqte, jobs, success_criteria_vqte)
     return metris
